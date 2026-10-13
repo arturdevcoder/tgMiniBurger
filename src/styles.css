@@ -1,17 +1,32 @@
 /* === Base Reset === */
 *, *::before, *::after { box-sizing: border-box; }
-html, body, #root { margin: 0; padding: 0; }
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  width: 100%;
+}
+
+:root {
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
+  --sar: env(safe-area-inset-right, 0px);
+  --tg-safe-top: var(--tg-viewport-safe-area-inset-top, var(--sat));
+  --tg-safe-bottom: var(--tg-viewport-safe-area-inset-bottom, var(--sab));
+}
 
 body {
   font-family: 'Inter', sans-serif;
-  background-color: #e5e7eb;
-  min-height: 100vh;
+  background-color: #F8F9FA;
+  min-height: 100%;
   -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
 }
 
 #root {
   width: 100%;
-  min-height: 100vh;
+  height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;

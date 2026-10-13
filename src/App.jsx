@@ -20,8 +20,20 @@ export default function App() {
   const [checkoutLoading, setCheckoutLoading] = useState(false);
 
   useEffect(() => {
-    tg?.ready();
-    tg?.expand();
+    if (tg) {
+      tg.ready();
+      tg.expand();
+      try {
+        if (typeof tg.requestFullscreen === "function") {
+          tg.requestFullscreen();
+        }
+        if (typeof tg.disableVerticalSwipes === "function") {
+          tg.disableVerticalSwipes();
+        }
+      } catch (err) {
+        console.error("TG fullscreen error:", err);
+      }
+    }
   }, []);
 
   // ======= PRODUCT DETAILS =======
@@ -190,15 +202,20 @@ export default function App() {
   return (
     <div
       id="app"
-      className="max-w-md w-full mx-auto relative bg-[#F8F9FA] h-[100dvh] overflow-hidden shadow-2xl flex flex-col font-sans rounded-none md:rounded-[2.5rem] md:h-[90vh] md:border-[8px] border-gray-800"
+      className="w-full max-w-md mx-auto relative bg-[#F8F9FA] h-[100dvh] overflow-hidden flex flex-col font-sans"
     >
       {/* ==================== SCREEN 1: HOME ==================== */}
       <div
         id="home-screen"
-        className={`screen ${showDetails || showCart ? "" : "screen-active"} absolute inset-0 z-10 overflow-y-auto pb-28 no-scrollbar`}
+        className={`screen ${showDetails || showCart ? "" : "screen-active"} absolute inset-0 z-10 overflow-y-auto pb-32 no-scrollbar`}
       >
-        {/* Header */}
-        <header className="px-6 pt-6">
+        {/* Header with safe area top padding for TG buttons */}
+        <header
+          className="px-6 pb-2"
+          style={{
+            paddingTop: "max(1rem, calc(var(--tg-safe-top) + 0.5rem))",
+          }}
+        >
           <div className="flex items-center gap-3">
             {/* Dark rounded icon box */}
             <div className="w-12 h-12 bg-gray-950 rounded-2xl flex items-center justify-center shadow-md shadow-black/10 shrink-0">
@@ -217,7 +234,7 @@ export default function App() {
         </header>
 
         {/* Greeting */}
-        <div className="px-6 pt-5 pb-5">
+        <div className="px-6 pt-3 pb-5">
           <h1 className="text-3xl font-extrabold text-gray-900 leading-tight">
             Что будем <br />
             <span className="text-brand">есть сегодня?</span> 🤤
@@ -225,19 +242,19 @@ export default function App() {
         </div>
 
         {/* Categories */}
-        <div className="flex overflow-x-auto gap-4 px-6 mb-8 no-scrollbar">
+        <div className="flex overflow-x-auto gap-3.5 px-6 mb-8 no-scrollbar touch-pan-x scroll-smooth -mx-1 px-7">
           {CATEGORIES.map((cat) => (
             <button
               key={cat.id}
               onClick={() => setActiveCategory(cat.id)}
-              className={`flex flex-col items-center justify-center min-w-[70px] h-[90px] rounded-[24px] active:scale-95 transition transform ${
+              className={`flex flex-col items-center justify-center shrink-0 w-[74px] h-[92px] rounded-[24px] active:scale-95 transition transform ${
                 activeCategory === cat.id
                   ? "bg-brand text-white shadow-brand"
                   : "bg-white text-gray-600 shadow-soft"
               }`}
             >
               <div
-                className={`w-10 h-10 rounded-full flex items-center justify-center mb-1 text-xl ${
+                className={`w-11 h-11 rounded-full flex items-center justify-center mb-1 text-2xl ${
                   activeCategory === cat.id ? "bg-white/20" : "bg-gray-50"
                 }`}
               >
@@ -250,7 +267,15 @@ export default function App() {
 
         {/* Products */}
         <div className="px-6 mb-4">
-          <h2 className="text-lg font-bold text-gray-900 mb-4">Популярное</h2>
+          <h2 className="text-lg font-bold text-gray-900 mb-4">
+            {CATEGORIES.find((c) => c.id === activeCategory)?.name || "Популярное"}
+          </h2>
+          {filteredProducts.length === 0 ? (
+            <div className="py-12 flex flex-col items-center justify-center text-center opacity-60">
+              <span className="text-5xl mb-3">🍽️</span>
+              <p className="text-sm text-gray-500 font-medium">В этой категории пока нет блюд</p>
+            </div>
+          ) : (
           <div className="grid grid-cols-2 gap-4">
             {filteredProducts.map((product, index) => {
               const catLabel = CATEGORIES.find(c => c.id === product.category)?.name || "";
@@ -318,6 +343,7 @@ export default function App() {
               );
             })}
           </div>
+          )}
         </div>
       </div>
 
@@ -327,7 +353,12 @@ export default function App() {
         className={`screen ${showDetails ? "screen-active" : "screen-hidden-right"} absolute inset-0 z-30 bg-white flex flex-col`}
       >
         {/* Details Header */}
-        <div className="absolute top-0 left-0 w-full p-6 flex justify-between items-center z-40">
+        <div
+          className="absolute top-0 left-0 w-full px-6 flex justify-between items-center z-40"
+          style={{
+            paddingTop: "max(1.25rem, calc(var(--tg-safe-top) + 0.5rem))",
+          }}
+        >
           <button
             onClick={closeDetails}
             className="w-10 h-10 bg-white/80 backdrop-blur rounded-full flex items-center justify-center shadow-sm active:scale-90 transition"
@@ -439,7 +470,12 @@ export default function App() {
         </div>
 
         {/* Details Footer (Fixed) */}
-        <div className="absolute bottom-0 left-0 w-full bg-white p-6 shadow-[0_-10px_40px_rgba(0,0,0,0.08)] rounded-t-[30px] z-40 flex items-center justify-between">
+        <div
+          className="absolute bottom-0 left-0 w-full bg-white px-6 pt-5 shadow-[0_-10px_40px_rgba(0,0,0,0.08)] rounded-t-[30px] z-40 flex items-center justify-between"
+          style={{
+            paddingBottom: "max(1.5rem, calc(var(--tg-safe-bottom) + 0.75rem))",
+          }}
+        >
           <div className="flex flex-col">
             <span className="text-xs text-gray-500 mb-1">Итоговая цена</span>
             <span className="text-2xl font-black text-gray-900">
@@ -461,7 +497,12 @@ export default function App() {
         id="cart-screen"
         className={`screen ${showCart ? "screen-active" : "screen-hidden-bottom"} absolute inset-0 z-50 bg-[#F8F9FA] flex flex-col`}
       >
-        <div className="p-6 bg-white flex justify-between items-center shadow-sm z-10">
+        <div
+          className="px-6 pb-4 bg-white flex justify-between items-center shadow-sm z-10"
+          style={{
+            paddingTop: "max(1.25rem, calc(var(--tg-safe-top) + 0.5rem))",
+          }}
+        >
           <h2 className="text-xl font-bold text-gray-900">Корзина</h2>
           <button
             onClick={closeCart}
@@ -471,7 +512,7 @@ export default function App() {
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-6 no-scrollbar">
+        <div className="flex-1 overflow-y-auto p-6 pb-28 no-scrollbar">
           {cart.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-center opacity-50">
               <i className="fa-solid fa-basket-shopping text-6xl mb-4 text-gray-300"></i>
@@ -581,7 +622,12 @@ export default function App() {
 
         {/* Cart Footer */}
         {cart.length > 0 && (
-          <div className="bg-white p-6 rounded-t-[30px] shadow-[0_-10px_40px_rgba(0,0,0,0.08)]">
+          <div
+            className="bg-white px-6 pt-5 rounded-t-[30px] shadow-[0_-10px_40px_rgba(0,0,0,0.08)]"
+            style={{
+              paddingBottom: "max(1.5rem, calc(var(--tg-safe-bottom) + 0.75rem))",
+            }}
+          >
             <div className="space-y-3 mb-6">
               <div className="flex justify-between text-sm text-gray-500">
                 <span>Сумма заказов</span>
@@ -621,9 +667,12 @@ export default function App() {
       {/* ==================== BOTTOM NAVIGATION ==================== */}
       <div
         id="bottom-nav"
-        className={`absolute bottom-6 left-6 right-6 h-[70px] bg-gray-900 rounded-[24px] shadow-2xl flex justify-between items-center px-8 z-20 transition-transform duration-300 ${
-          showDetails || showCart ? "translate-y-[150%]" : "translate-y-0"
+        className={`absolute left-6 right-6 h-[70px] bg-gray-900 rounded-[24px] shadow-2xl flex justify-between items-center px-8 z-20 transition-transform duration-300 ${
+          showDetails || showCart ? "translate-y-[200%]" : "translate-y-0"
         }`}
+        style={{
+          bottom: "max(1.5rem, calc(var(--tg-safe-bottom) + 0.75rem))",
+        }}
       >
         <button className="text-white flex flex-col items-center gap-1 active:scale-90 transition">
           <i className="fa-solid fa-house text-lg"></i>
