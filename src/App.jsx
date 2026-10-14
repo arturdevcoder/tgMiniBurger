@@ -3,6 +3,22 @@ import { PRODUCTS, CATEGORIES, formatPrice } from "./data.js";
 
 const tg = window.Telegram?.WebApp;
 
+const API_BASE = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
+
+const getWsUrl = () => {
+  if (import.meta.env.VITE_WS_URL) {
+    return import.meta.env.VITE_WS_URL;
+  }
+  if (API_BASE.startsWith("http://")) {
+    return API_BASE.replace("http://", "ws://") + "/ws";
+  }
+  if (API_BASE.startsWith("https://")) {
+    return API_BASE.replace("https://", "wss://") + "/ws";
+  }
+  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${proto}//${window.location.host}/ws`;
+};
+
 export default function App() {
   // ======= STATE =======
   const [cart, setCart] = useState([]);
@@ -59,7 +75,7 @@ export default function App() {
   useEffect(() => {
     const savedOrderId = localStorage.getItem("activeOrderId");
     if (savedOrderId) {
-      fetch(`/api/orders/${savedOrderId}`)
+      fetch(`${API_BASE}/api/orders/${savedOrderId}`)
         .then((res) => res.json())
         .then((data) => {
           if (data.success && data.order) {
@@ -82,8 +98,7 @@ export default function App() {
 
     const connectWs = () => {
       try {
-        const proto = location.protocol === "https:" ? "wss:" : "ws:";
-        const wsUrl = `${proto}//${location.host}/ws`;
+        const wsUrl = getWsUrl();
         ws = new WebSocket(wsUrl);
 
         ws.onopen = () => {
@@ -113,7 +128,7 @@ export default function App() {
     // Polling fallback every 3s
     const pollInterval = setInterval(async () => {
       try {
-        const res = await fetch(`/api/orders/${activeOrder.id}`);
+        const res = await fetch(`${API_BASE}/api/orders/${activeOrder.id}`);
         const data = await res.json();
         if (data.success && data.order && isMounted) {
           if (data.order.status !== activeOrder.status || data.order.estimatedMinutes !== activeOrder.estimatedMinutes) {
@@ -316,7 +331,7 @@ export default function App() {
         };
       });
 
-      const res = await fetch("/api/orders", {
+      const res = await fetch(`${API_BASE}/api/orders`, {
         method: "POST",
         headers: { "Content-Type": "application/json; charset=UTF-8" },
         body: JSON.stringify({
