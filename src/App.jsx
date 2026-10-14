@@ -3,20 +3,11 @@ import { PRODUCTS, CATEGORIES, formatPrice } from "./data.js";
 
 const tg = window.Telegram?.WebApp;
 
-const API_BASE = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
+const API_BASE = "https://api.tg.kbadk.ru";
 
 const getWsUrl = () => {
-  if (import.meta.env.VITE_WS_URL) {
-    return import.meta.env.VITE_WS_URL;
-  }
-  if (API_BASE.startsWith("http://")) {
-    return API_BASE.replace("http://", "ws://") + "/ws";
-  }
-  if (API_BASE.startsWith("https://")) {
-    return API_BASE.replace("https://", "wss://") + "/ws";
-  }
-  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${window.location.host}/ws`;
+  // Автоматически сформирует wss://api.tg.kbadk.ru/ws
+  return "wss://api.tg.kbadk.ru/ws";
 };
 
 export default function App() {
