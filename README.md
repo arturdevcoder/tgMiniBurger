@@ -1,52 +1,73 @@
-# Burger Shop — Telegram Mini App
+# YUMMY — Telegram Mini App & Backend
 
-Меню бургеров, корзина и оформление заказа. Стек: React 18 + Vite.
+Полноценное приложение доставки еды с бэкендом на **Elysia.js**, **Drizzle ORM** (SQLite) и веб-панелью администратора с поддержкой подтверждения заказов в реальном времени.
 
-## Запуск
+## Стек технологий
+
+- **Фронтенд**: React 18, Vite, Tailwind CSS, FontAwesome, Telegram WebApp SDK
+- **Бэкенд**: [Elysia.js](https://elysiajs.com/), [Bun](https://bun.sh/), [Drizzle ORM](https://orm.drizzle.team/), SQLite (`bun:sqlite`), WebSocket
+
+---
+
+## Быстрый запуск
+
+### 1. Запуск бэкенда (Elysia.js + Drizzle ORM)
+
+В корне проекта:
 
 ```bash
-npm install
-npm run dev      # локальная разработка на http://localhost:5173
-npm run build    # production-сборка в папку dist/
+npm run server
+# или напрямую через bun:
+cd server && bun run src/index.ts
 ```
 
-В обычном браузере приложение работает полностью (заказ выводится в консоль).
+- Сервер запустится на: `http://localhost:3000`
+- **Панель администратора**: `http://localhost:3000/admin`
 
-## Подключение к Telegram
+### 2. Запуск фронтенда (React + Vite)
 
-1. Разместите `dist/` на HTTPS-хостинге (Vercel, Netlify, GitHub Pages, Cloudflare Pages)
-   или для теста используйте туннель: `npx ngrok http 5173`.
-2. Создайте бота через [@BotFather](https://t.me/BotFather): `/newbot`.
-3. Укажите адрес приложения: `/newapp` или `/setmenubutton` с URL вашего сайта.
-4. Откройте бота и нажмите кнопку меню — магазин откроется внутри Telegram.
+В отдельном терминале в корне проекта:
 
-## Как работает заказ
-
-Кнопка «Оформить» в Telegram отправляет JSON через `Telegram.WebApp.sendData()`.
-Бот получит его в обновлении `web_app_data`, например на Python (aiogram / python-telegram-bot):
-
-```python
-from aiogram import Router, F
-from aiogram.types import Message
-import json
-
-router = Router()
-
-@router.message(F.web_app_data)
-async def on_order(message: Message):
-    order = json.loads(message.web_app_data.data)
-    await message.answer(f"Заказ принят! Итого: {order['total']} ₽")
+```bash
+npm run dev
 ```
 
-Обратите внимание: `sendData` работает только если приложение открыто кнопкой
-клавиатуры или меню бота (`reply_markup` с `web_app`), а не по inline-ссылке.
+Приложение откроется на: `http://localhost:5173`
+(Vite автоматически проксирует запросы `/api` и `/ws` на бэкенд `http://localhost:3000`).
 
-## Структура
+---
 
+## Как устроен процесс подтверждения заказа
+
+1. **Клиент оформляет заказ**:
+   - Нажимает «Оформить заказ» в корзине.
+   - Вводит имя, телефон, адрес и комментарий (имя автоматически подтягивается из профиля Telegram).
+   - Заказ отправляется на бэкенд (`POST /api/orders`) и сохраняется в базе данных через **Drizzle ORM** со статусом `pending`.
+
+2. **Администратор получает уведомление**:
+   - **В веб-панели админа (`/admin`)**: раздается звуковой сигнал, новый заказ мгновенно появляется с кнопками «Принять (25 мин)», «Принять (45 мин)» и «Отклонить».
+   - **В Telegram** (если указан `BOT_TOKEN` в `server/.env`): бот присылает сообщение администратору с интерактивными инлайн-кнопками для быстрого подтверждения.
+
+3. **Отображение у клиента в приложении**:
+   - Пока заказ ожидает решения: статус **«Ожидает подтверждения от ресторана... ⏳»**.
+   - Как только админ нажимает **«Принять заказ»**:
+     - Через WebSocket и поллинг статус мгновенно обновляется.
+     - Отображается экран: **«Заказ принят, ждите! 🎉»**, шеф-повар готовит блюда, и показывается расчетное время ожидания (например, `~25 минут`).
+     - Срабатывает Telegram haptic feedback (вибрация успеха).
+   - Если заказ отклонен: статус **«К сожалению, заказ отклонен»**.
+
+---
+
+## Настройка Telegram Бота (опционально)
+
+Создайте файл `server/.env` (на основе `server/.env.example`):
+
+```env
+BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrSTUvwxYZ
+ADMIN_CHAT_ID=123456789
 ```
-src/
-  App.jsx       — экраны меню, корзины и оформления, интеграция с MainButton/BackButton
-  data.js       — меню и форматирование цены (редактируйте блюда здесь)
-  styles.css    — стили на CSS-переменных Telegram (тема подстраивается автоматически)
-  main.jsx      — точка входа
-```
+
+1. `BOT_TOKEN` — токен бота от [@BotFather](https://t.me/BotFather).
+2. `ADMIN_CHAT_ID` — ваш Telegram ID (узнать можно через [@userinfobot](https://t.me/userinfobot)).
+
+После перезапуска сервера новые заказы будут приходить прямо в личные сообщения админу с кнопками подтверждения.

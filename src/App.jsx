@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { PRODUCTS, CATEGORIES, formatPrice } from "./data.js";
 
 const tg = window.Telegram?.WebApp;
@@ -14,11 +14,30 @@ export default function App() {
 
   const [editingCartItemId, setEditingCartItemId] = useState(null);
 
-  // Screens: "home" | "details" | "cart"
+  // Screens & modals
   const [showDetails, setShowDetails] = useState(false);
   const [showCart, setShowCart] = useState(false);
+  const [showCheckoutModal, setShowCheckoutModal] = useState(false);
+  const [showOrderTracking, setShowOrderTracking] = useState(false);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
 
+  // Checkout form state
+  const [customerName, setCustomerName] = useState(() => {
+    const user = tg?.initDataUnsafe?.user;
+    if (user?.first_name) {
+      return `${user.first_name} ${user.last_name || ""}`.trim();
+    }
+    return "";
+  });
+  const [customerPhone, setCustomerPhone] = useState("");
+  const [customerAddress, setCustomerAddress] = useState("");
+  const [customerComment, setCustomerComment] = useState("");
+  const [formError, setFormError] = useState("");
+
+  // Active Order state
+  const [activeOrder, setActiveOrder] = useState(null);
+
+  // Initialize Telegram
   useEffect(() => {
     if (tg) {
       tg.ready();
@@ -35,6 +54,84 @@ export default function App() {
       }
     }
   }, []);
+
+  // Restore active order from localStorage if exists
+  useEffect(() => {
+    const savedOrderId = localStorage.getItem("activeOrderId");
+    if (savedOrderId) {
+      fetch(`/api/orders/${savedOrderId}`)
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.success && data.order) {
+            setActiveOrder(data.order);
+            if (data.order.status === "pending" || data.order.status === "accepted") {
+              setShowOrderTracking(true);
+            }
+          }
+        })
+        .catch(() => {});
+    }
+  }, []);
+
+  // Real-time updates for activeOrder via WebSocket and Polling fallback
+  useEffect(() => {
+    if (!activeOrder || (activeOrder.status !== "pending" && activeOrder.status !== "accepted")) return;
+
+    let ws = null;
+    let isMounted = true;
+
+    const connectWs = () => {
+      try {
+        const proto = location.protocol === "https:" ? "wss:" : "ws:";
+        const wsUrl = `${proto}//${location.host}/ws`;
+        ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+          ws.send(JSON.stringify({ type: "subscribe_order", orderId: activeOrder.id }));
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            if (data.type === "order_status_changed" && data.order && data.order.id === activeOrder.id) {
+              if (isMounted) {
+                setActiveOrder(data.order);
+                if (data.order.status === "accepted") {
+                  tg?.HapticFeedback?.notificationOccurred("success");
+                } else if (data.order.status === "rejected") {
+                  tg?.HapticFeedback?.notificationOccurred("error");
+                }
+              }
+            }
+          } catch (e) {}
+        };
+      } catch (e) {}
+    };
+
+    connectWs();
+
+    // Polling fallback every 3s
+    const pollInterval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/orders/${activeOrder.id}`);
+        const data = await res.json();
+        if (data.success && data.order && isMounted) {
+          if (data.order.status !== activeOrder.status || data.order.estimatedMinutes !== activeOrder.estimatedMinutes) {
+            setActiveOrder(data.order);
+            if (data.order.status === "accepted") {
+              tg?.HapticFeedback?.notificationOccurred("success");
+            }
+          }
+        }
+      } catch (e) {}
+    }, 3000);
+
+    return () => {
+      isMounted = false;
+      clearInterval(pollInterval);
+      if (ws) ws.close();
+    };
+  }, [activeOrder?.id, activeOrder?.status]);
 
   // ======= PRODUCT DETAILS =======
   const openDetails = useCallback((productId) => {
@@ -184,15 +281,74 @@ export default function App() {
 
   const cartTotal = cart.reduce((sum, item) => sum + item.price * item.qty, 0);
 
-  const checkout = useCallback(() => {
+  // Submit order to Elysia backend
+  const handleStartCheckout = () => {
+    setFormError("");
+    setShowCheckoutModal(true);
+  };
+
+  const submitOrder = async () => {
+    if (!customerName.trim() || !customerPhone.trim() || !customerAddress.trim()) {
+      setFormError("Пожалуйста, заполните имя, телефон и адрес доставки");
+      tg?.HapticFeedback?.notificationOccurred("error");
+      return;
+    }
+
+    setFormError("");
     setCheckoutLoading(true);
-    setTimeout(() => {
-      alert("Заказ успешно оформлен! 🎉");
-      setCart([]);
+
+    try {
+      // Prepare detailed items
+      const itemsPayload = cart.map((c) => {
+        const prod = PRODUCTS.find((p) => p.id === c.productId);
+        const toppingNames = (c.toppingIds || [])
+          .map((tid) => prod?.toppings?.find((t) => t.id === tid)?.name)
+          .filter(Boolean)
+          .join(", ");
+
+        return {
+          name: c.name,
+          size: c.size,
+          toppings: toppingNames,
+          price: c.price,
+          qty: c.qty || 1,
+          img: c.img,
+        };
+      });
+
+      const res = await fetch("/api/orders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json; charset=UTF-8" },
+        body: JSON.stringify({
+          customerName: customerName.trim(),
+          customerPhone: customerPhone.trim(),
+          customerAddress: customerAddress.trim(),
+          customerComment: customerComment.trim() || undefined,
+          items: itemsPayload,
+          totalAmount: cartTotal,
+        }),
+      });
+
+      const data = await res.json();
+      if (data.success && data.order) {
+        setCart([]);
+        setActiveOrder(data.order);
+        localStorage.setItem("activeOrderId", String(data.order.id));
+        setShowCart(false);
+        setShowCheckoutModal(false);
+        setShowOrderTracking(true);
+        tg?.HapticFeedback?.notificationOccurred("success");
+      } else {
+        setFormError(data.error || "Не удалось отправить заказ");
+        tg?.HapticFeedback?.notificationOccurred("error");
+      }
+    } catch (err) {
+      setFormError("Ошибка подключения к серверу");
+      tg?.HapticFeedback?.notificationOccurred("error");
+    } finally {
       setCheckoutLoading(false);
-      setShowCart(false);
-    }, 1000);
-  }, []);
+    }
+  };
 
   const filteredProducts = PRODUCTS.filter(
     (p) => p.category === activeCategory
@@ -207,7 +363,7 @@ export default function App() {
       {/* ==================== SCREEN 1: HOME ==================== */}
       <div
         id="home-screen"
-        className={`screen ${showDetails || showCart ? "" : "screen-active"} absolute inset-0 z-10 overflow-y-auto pb-32 no-scrollbar`}
+        className={`screen ${showDetails || showCart || showOrderTracking ? "" : "screen-active"} absolute inset-0 z-10 overflow-y-auto pb-32 no-scrollbar`}
       >
         {/* Header with safe area top padding for TG buttons */}
         <header
@@ -216,20 +372,38 @@ export default function App() {
             paddingTop: "max(1rem, calc(var(--tg-safe-top) + 0.5rem))",
           }}
         >
-          <div className="flex items-center gap-3">
-            {/* Dark rounded icon box */}
-            <div className="w-12 h-12 bg-gray-950 rounded-2xl flex items-center justify-center shadow-md shadow-black/10 shrink-0">
-              <span className="text-2xl leading-none select-none">🍔</span>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              {/* Dark rounded icon box */}
+              <div className="w-12 h-12 bg-gray-950 rounded-2xl flex items-center justify-center shadow-md shadow-black/10 shrink-0">
+                <span className="text-2xl leading-none select-none">🍔</span>
+              </div>
+              {/* Brand text */}
+              <div className="flex flex-col">
+                <span className="text-xl font-black text-gray-900 tracking-wider leading-none">
+                  YUMMY
+                </span>
+                <span className="text-[10px] font-bold text-gray-400 tracking-widest uppercase mt-1">
+                  доставка еды
+                </span>
+              </div>
             </div>
-            {/* Brand text */}
-            <div className="flex flex-col">
-              <span className="text-xl font-black text-gray-900 tracking-wider leading-none">
-                YUMMY
-              </span>
-              <span className="text-[10px] font-bold text-gray-400 tracking-widest uppercase mt-1">
-                доставка еды
-              </span>
-            </div>
+
+            {/* If active order exists, show a floating status button */}
+            {activeOrder && (activeOrder.status === "pending" || activeOrder.status === "accepted") && (
+              <button
+                type="button"
+                onClick={() => setShowOrderTracking(true)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold transition shadow-sm active:scale-95 ${
+                  activeOrder.status === "accepted"
+                    ? "bg-green-500 text-white animate-pulse"
+                    : "bg-amber-100 text-amber-800 border border-amber-300"
+                }`}
+              >
+                <span>{activeOrder.status === "accepted" ? "🛵" : "⏳"}</span>
+                <span>{activeOrder.status === "accepted" ? "Принят" : "Ждет..."}</span>
+              </button>
+            )}
           </div>
         </header>
 
@@ -276,73 +450,73 @@ export default function App() {
               <p className="text-sm text-gray-500 font-medium">В этой категории пока нет блюд</p>
             </div>
           ) : (
-          <div className="grid grid-cols-2 gap-4">
-            {filteredProducts.map((product, index) => {
-              const catLabel = CATEGORIES.find(c => c.id === product.category)?.name || "";
-              const isFav = favorites.has(product.id);
-              return (
-                <div
-                  key={product.id}
-                  onClick={() => openDetails(product.id)}
-                  className={`bg-white rounded-[20px] overflow-hidden shadow-soft cursor-pointer active:scale-[0.97] transition transform opacity-0 animate-pop-in delay-${(index + 1) * 100}`}
-                >
-                  {/* Image */}
-                  <div className="relative w-full h-36 bg-gray-50">
-                    <img
-                      src={product.img}
-                      alt={product.name}
-                      className="w-full h-full object-cover"
-                    />
-                    {/* Heart */}
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        toggleFavorite(product.id);
-                      }}
-                      className="absolute top-2.5 right-2.5 w-8 h-8 bg-white/95 backdrop-blur-sm rounded-full flex items-center justify-center shadow-md active:scale-90 transition"
-                      aria-label="В избранное"
-                    >
-                      {isFav ? (
-                        <i className="fa-solid fa-heart text-red-500 text-sm"></i>
-                      ) : (
-                        <i className="fa-regular fa-heart text-gray-700 text-sm"></i>
-                      )}
-                    </button>
-                  </div>
-
-                  {/* Info */}
-                  <div className="p-3.5">
-                    <h3 className="font-bold text-gray-900 text-sm leading-tight mb-1">
-                      {product.name}
-                    </h3>
-                    <p className="text-[11px] text-gray-400 mb-3">
-                      {catLabel} · {product.time}-{product.time + 10} мин
-                    </p>
-                    <div className="flex justify-between items-end">
-                      <div>
-                        <span className="font-extrabold text-gray-900 text-base">
-                          {product.basePrice} ₽
-                        </span>
-                        <p className="text-[10px] text-gray-400 mt-0.5">от цены</p>
-                      </div>
+            <div className="grid grid-cols-2 gap-4">
+              {filteredProducts.map((product, index) => {
+                const catLabel = CATEGORIES.find((c) => c.id === product.category)?.name || "";
+                const isFav = favorites.has(product.id);
+                return (
+                  <div
+                    key={product.id}
+                    onClick={() => openDetails(product.id)}
+                    className={`bg-white rounded-[20px] overflow-hidden shadow-soft cursor-pointer active:scale-[0.97] transition transform opacity-0 animate-pop-in delay-${(index + 1) * 100}`}
+                  >
+                    {/* Image */}
+                    <div className="relative w-full h-36 bg-gray-50">
+                      <img
+                        src={product.img}
+                        alt={product.name}
+                        className="w-full h-full object-cover"
+                      />
+                      {/* Heart */}
                       <button
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
-                          openDetails(product.id);
+                          toggleFavorite(product.id);
                         }}
-                        className="w-10 h-10 bg-brand text-white rounded-2xl flex items-center justify-center shadow-brand active:scale-90 transition"
-                        aria-label="Открыть товар"
+                        className="absolute top-2.5 right-2.5 w-8 h-8 bg-white/95 backdrop-blur-sm rounded-full flex items-center justify-center shadow-md active:scale-90 transition"
+                        aria-label="В избранное"
                       >
-                        <i className="fa-solid fa-plus text-base"></i>
+                        {isFav ? (
+                          <i className="fa-solid fa-heart text-red-500 text-sm"></i>
+                        ) : (
+                          <i className="fa-regular fa-heart text-gray-700 text-sm"></i>
+                        )}
                       </button>
                     </div>
+
+                    {/* Info */}
+                    <div className="p-3.5">
+                      <h3 className="font-bold text-gray-900 text-sm leading-tight mb-1">
+                        {product.name}
+                      </h3>
+                      <p className="text-[11px] text-gray-400 mb-3">
+                        {catLabel} · {product.time}-{product.time + 10} мин
+                      </p>
+                      <div className="flex justify-between items-end">
+                        <div>
+                          <span className="font-extrabold text-gray-900 text-base">
+                            {product.basePrice} ₽
+                          </span>
+                          <p className="text-[10px] text-gray-400 mt-0.5">от цены</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openDetails(product.id);
+                          }}
+                          className="w-10 h-10 bg-brand text-white rounded-2xl flex items-center justify-center shadow-brand active:scale-90 transition"
+                          aria-label="Открыть товар"
+                        >
+                          <i className="fa-solid fa-plus text-base"></i>
+                        </button>
+                      </div>
+                    </div>
                   </div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
           )}
         </div>
       </div>
@@ -411,7 +585,7 @@ export default function App() {
             {/* Size selection */}
             <div className="mb-6">
               <div className="flex justify-between items-center mb-3">
-                <h3 className="text-sm font-bold text-gray-900">Размер</h3>
+                <h3 className="text-sm font-bold text-gray-900">Размер / Порция</h3>
               </div>
               <div className="flex gap-3">
                 {currentProduct?.sizes.map((size) => {
@@ -434,38 +608,40 @@ export default function App() {
             </div>
 
             {/* Toppings */}
-            <div className="mb-6">
-              <h3 className="text-sm font-bold text-gray-900 mb-3">
-                Добавить топпинги
-              </h3>
-              <div className="flex flex-wrap gap-3">
-                {currentProduct?.toppings.map((top) => {
-                  const isActive = selectedToppings.has(top.id);
-                  return (
-                    <div
-                      key={top.id}
-                      onClick={() => toggleTopping(top.id)}
-                      className={`relative border-2 rounded-xl p-3 flex flex-col items-center gap-1 cursor-pointer active:scale-95 transition w-[calc(33.333%-0.5rem)] ${
-                        isActive
-                          ? "border-brand bg-brand-light text-brand"
-                          : "border-gray-200 bg-white text-gray-700"
-                      }`}
-                    >
-                      {isActive && (
-                        <i className="fa-solid fa-circle-check absolute top-1.5 right-1.5 text-brand"></i>
-                      )}
-                      <span className="text-2xl">{top.icon}</span>
-                      <span className="text-xs font-semibold mt-1">
-                        {top.name}
-                      </span>
-                      <span className="text-[10px] opacity-80">
-                        +{top.price}₽
-                      </span>
-                    </div>
-                  );
-                })}
+            {currentProduct?.toppings && currentProduct.toppings.length > 0 && (
+              <div className="mb-6">
+                <h3 className="text-sm font-bold text-gray-900 mb-3">
+                  Добавить топпинги
+                </h3>
+                <div className="flex flex-wrap gap-3">
+                  {currentProduct.toppings.map((top) => {
+                    const isActive = selectedToppings.has(top.id);
+                    return (
+                      <div
+                        key={top.id}
+                        onClick={() => toggleTopping(top.id)}
+                        className={`relative border-2 rounded-xl p-3 flex flex-col items-center gap-1 cursor-pointer active:scale-95 transition w-[calc(33.333%-0.5rem)] ${
+                          isActive
+                            ? "border-brand bg-brand-light text-brand"
+                            : "border-gray-200 bg-white text-gray-700"
+                        }`}
+                      >
+                        {isActive && (
+                          <i className="fa-solid fa-circle-check absolute top-1.5 right-1.5 text-brand"></i>
+                        )}
+                        <span className="text-2xl">{top.icon}</span>
+                        <span className="text-xs font-semibold mt-1">
+                          {top.name}
+                        </span>
+                        <span className="text-[10px] opacity-80">
+                          +{top.price}₽
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
+            )}
           </div>
         </div>
 
@@ -516,7 +692,7 @@ export default function App() {
           {cart.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-center opacity-50">
               <i className="fa-solid fa-basket-shopping text-6xl mb-4 text-gray-300"></i>
-              <p className="text-gray-500">Ваша корзина пуста</p>
+              <p className="text-gray-500 font-medium">Ваша корзина пуста</p>
             </div>
           ) : (
             cart.map((item, index) => {
@@ -648,27 +824,349 @@ export default function App() {
               </div>
             </div>
             <button
-              onClick={checkout}
+              onClick={handleStartCheckout}
               className="w-full bg-brand text-white py-4 rounded-[20px] font-bold text-lg active:scale-95 transition shadow-brand"
             >
-              {checkoutLoading ? (
-                <>
-                  <i className="fa-solid fa-spinner fa-spin mr-2"></i>
-                  Оформляем...
-                </>
-              ) : (
-                "Оформить заказ"
-              )}
+              Оформить заказ
             </button>
           </div>
         )}
+      </div>
+
+      {/* ==================== SCREEN 4: CHECKOUT FORM MODAL ==================== */}
+      <div
+        className={`screen ${showCheckoutModal ? "screen-active" : "screen-hidden-bottom"} absolute inset-0 z-50 bg-[#F8F9FA] flex flex-col`}
+      >
+        <div
+          className="px-6 pb-4 bg-white flex justify-between items-center shadow-sm z-10"
+          style={{
+            paddingTop: "max(1.25rem, calc(var(--tg-safe-top) + 0.5rem))",
+          }}
+        >
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowCheckoutModal(false)}
+              className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-700 active:scale-90 transition mr-1"
+            >
+              <i className="fa-solid fa-arrow-left text-sm"></i>
+            </button>
+            <h2 className="text-xl font-bold text-gray-900">Данные доставки</h2>
+          </div>
+          <button
+            onClick={() => setShowCheckoutModal(false)}
+            className="w-10 h-10 bg-gray-100 rounded-full flex items-center justify-center active:scale-90 transition"
+          >
+            <i className="fa-solid fa-xmark text-gray-800"></i>
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-6 pb-28 no-scrollbar">
+          <div className="bg-white rounded-3xl p-5 shadow-sm space-y-4 mb-4">
+            <div>
+              <label className="block text-xs font-bold text-gray-700 mb-1.5 uppercase tracking-wide">
+                Ваше имя *
+              </label>
+              <input
+                type="text"
+                value={customerName}
+                onChange={(e) => setCustomerName(e.target.value)}
+                placeholder="Как к вам обращаться"
+                className="w-full bg-gray-50 border border-gray-200 rounded-2xl px-4 py-3.5 text-sm text-gray-900 focus:outline-none focus:border-brand focus:bg-white transition"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-gray-700 mb-1.5 uppercase tracking-wide">
+                Телефон *
+              </label>
+              <input
+                type="tel"
+                value={customerPhone}
+                onChange={(e) => setCustomerPhone(e.target.value)}
+                placeholder="+7 (999) 000-00-00"
+                className="w-full bg-gray-50 border border-gray-200 rounded-2xl px-4 py-3.5 text-sm text-gray-900 focus:outline-none focus:border-brand focus:bg-white transition"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-gray-700 mb-1.5 uppercase tracking-wide">
+                Адрес доставки *
+              </label>
+              <input
+                type="text"
+                value={customerAddress}
+                onChange={(e) => setCustomerAddress(e.target.value)}
+                placeholder="Улица, дом, подъезд, квартира"
+                className="w-full bg-gray-50 border border-gray-200 rounded-2xl px-4 py-3.5 text-sm text-gray-900 focus:outline-none focus:border-brand focus:bg-white transition"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-gray-700 mb-1.5 uppercase tracking-wide">
+                Комментарий курьеру
+              </label>
+              <textarea
+                value={customerComment}
+                onChange={(e) => setCustomerComment(e.target.value)}
+                placeholder="Код домофона, этаж, пожелания..."
+                rows={2}
+                className="w-full bg-gray-50 border border-gray-200 rounded-2xl px-4 py-3 text-sm text-gray-900 focus:outline-none focus:border-brand focus:bg-white transition resize-none"
+              ></textarea>
+            </div>
+          </div>
+
+          {formError && (
+            <div className="bg-red-50 text-red-600 border border-red-200 rounded-2xl px-4 py-3 text-xs font-semibold mb-4 flex items-center gap-2">
+              <i className="fa-solid fa-circle-exclamation text-sm shrink-0"></i>
+              <span>{formError}</span>
+            </div>
+          )}
+
+          <div className="bg-amber-50 border border-amber-200/80 rounded-2xl p-4 text-amber-900 text-xs">
+            <div className="flex items-center gap-2 font-bold mb-1">
+              <i className="fa-solid fa-bell text-amber-600"></i>
+              <span>Подтверждение администратора</span>
+            </div>
+            <p className="text-amber-800/90 leading-relaxed">
+              После отправки заказ поступит администратору. Вы сразу увидите статус подтверждения прямо в приложении!
+            </p>
+          </div>
+        </div>
+
+        {/* Checkout Modal Footer */}
+        <div
+          className="bg-white px-6 pt-4 rounded-t-[30px] shadow-[0_-10px_40px_rgba(0,0,0,0.08)]"
+          style={{
+            paddingBottom: "max(1.5rem, calc(var(--tg-safe-bottom) + 0.75rem))",
+          }}
+        >
+          <div className="flex justify-between items-center mb-3 text-sm">
+            <span className="text-gray-500">К оплате при получении:</span>
+            <span className="text-xl font-black text-brand">{formatPrice(cartTotal)}</span>
+          </div>
+          <button
+            onClick={submitOrder}
+            disabled={checkoutLoading}
+            className="w-full bg-brand hover:bg-brand-dark text-white py-4 rounded-[20px] font-bold text-lg active:scale-95 transition shadow-brand flex items-center justify-center gap-2"
+          >
+            {checkoutLoading ? (
+              <>
+                <i className="fa-solid fa-spinner fa-spin"></i>
+                <span>Отправка заказа...</span>
+              </>
+            ) : (
+              <>
+                <span>Отправить заказ</span>
+                <i className="fa-solid fa-paper-plane text-sm"></i>
+              </>
+            )}
+          </button>
+        </div>
+      </div>
+
+      {/* ==================== SCREEN 5: ORDER TRACKING SCREEN ==================== */}
+      <div
+        className={`screen ${showOrderTracking ? "screen-active" : "screen-hidden-bottom"} absolute inset-0 z-50 bg-[#F8F9FA] flex flex-col`}
+      >
+        <div
+          className="px-6 pb-4 bg-white flex justify-between items-center shadow-sm z-10"
+          style={{
+            paddingTop: "max(1.25rem, calc(var(--tg-safe-top) + 0.5rem))",
+          }}
+        >
+          <h2 className="text-xl font-bold text-gray-900">
+            Заказ #{activeOrder?.id || ""}
+          </h2>
+          <button
+            onClick={() => setShowOrderTracking(false)}
+            className="w-10 h-10 bg-gray-100 rounded-full flex items-center justify-center active:scale-90 transition"
+          >
+            <i className="fa-solid fa-xmark text-gray-800"></i>
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-6 pb-28 no-scrollbar">
+          {activeOrder && (
+            <div className="space-y-4">
+              {/* Dynamic Status Banner */}
+              {activeOrder.status === "pending" && (
+                <div className="bg-gradient-to-br from-amber-500 to-amber-600 text-white rounded-3xl p-6 text-center shadow-lg relative overflow-hidden">
+                  <div className="w-16 h-16 rounded-full bg-white/20 backdrop-blur-md mx-auto flex items-center justify-center text-3xl mb-3 animate-bounce">
+                    ⏳
+                  </div>
+                  <span className="inline-block px-3 py-1 bg-white/20 backdrop-blur-md rounded-full text-xs font-bold uppercase tracking-wider mb-2">
+                    Ожидает подтверждения
+                  </span>
+                  <h3 className="text-2xl font-black mb-2 leading-tight">
+                    Заказ отправлен админу!
+                  </h3>
+                  <p className="text-xs text-amber-100 max-w-xs mx-auto leading-relaxed">
+                    Администратор проверяет заказ и вот-вот подтвердит его. Страница обновится автоматически!
+                  </p>
+                  <div className="mt-4 flex items-center justify-center gap-2 text-xs font-semibold bg-black/10 py-2 rounded-xl">
+                    <span className="w-2.5 h-2.5 rounded-full bg-white animate-ping"></span>
+                    <span>Связь с рестораном активна</span>
+                  </div>
+                </div>
+              )}
+
+              {activeOrder.status === "accepted" && (
+                <div className="bg-gradient-to-br from-green-500 to-emerald-600 text-white rounded-3xl p-6 text-center shadow-lg relative overflow-hidden">
+                  <div className="w-16 h-16 rounded-full bg-white/20 backdrop-blur-md mx-auto flex items-center justify-center text-3xl mb-3 shadow-inner">
+                    🎉
+                  </div>
+                  <span className="inline-block px-3 py-1 bg-white/20 backdrop-blur-md rounded-full text-xs font-bold uppercase tracking-wider mb-2">
+                    Заказ принят рестораном!
+                  </span>
+                  <h3 className="text-2xl font-black mb-1.5 leading-tight">
+                    Заказ принят, ждите!
+                  </h3>
+                  <p className="text-sm font-semibold text-green-100">
+                    Шеф-повар уже начал готовить ваши блюда
+                  </p>
+
+                  <div className="mt-4 bg-white/20 backdrop-blur-md rounded-2xl p-4 text-center">
+                    <span className="text-xs uppercase tracking-wider text-green-100 block mb-0.5">
+                      Примерное время доставки
+                    </span>
+                    <span className="text-3xl font-black text-white">
+                      ~{activeOrder.estimatedMinutes || 25} минут
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {activeOrder.status === "rejected" && (
+                <div className="bg-gradient-to-br from-red-500 to-rose-600 text-white rounded-3xl p-6 text-center shadow-lg">
+                  <div className="w-16 h-16 rounded-full bg-white/20 backdrop-blur-md mx-auto flex items-center justify-center text-3xl mb-3">
+                    ❌
+                  </div>
+                  <span className="inline-block px-3 py-1 bg-white/20 backdrop-blur-md rounded-full text-xs font-bold uppercase tracking-wider mb-2">
+                    Заказ отклонен
+                  </span>
+                  <h3 className="text-xl font-black mb-1 leading-tight">
+                    Ресторан не смог принять заказ
+                  </h3>
+                  <p className="text-xs text-red-100 max-w-xs mx-auto mt-2">
+                    Приносим извинения. Пожалуйста, попробуйте оформить заказ позже или выберите другие позиции.
+                  </p>
+                </div>
+              )}
+
+              {/* Progress Tracker */}
+              <div className="bg-white rounded-3xl p-5 shadow-sm">
+                <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-4">
+                  Этапы выполнения
+                </h4>
+                <div className="space-y-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-full bg-green-500 text-white flex items-center justify-center text-xs font-bold shadow-sm shrink-0">
+                      <i className="fa-solid fa-check"></i>
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold text-gray-900">Заказ отправлен</p>
+                      <p className="text-[10px] text-gray-400">{activeOrder.createdAt}</p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3">
+                    <div
+                      className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${
+                        activeOrder.status === "accepted"
+                          ? "bg-green-500 text-white shadow-sm"
+                          : activeOrder.status === "pending"
+                          ? "bg-amber-100 text-amber-700 animate-pulse border-2 border-amber-300"
+                          : "bg-gray-100 text-gray-400"
+                      }`}
+                    >
+                      {activeOrder.status === "accepted" ? (
+                        <i className="fa-solid fa-check"></i>
+                      ) : (
+                        <i className="fa-solid fa-kitchen-set"></i>
+                      )}
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold text-gray-900">
+                        {activeOrder.status === "accepted"
+                          ? "Подтвержден и готовится"
+                          : activeOrder.status === "rejected"
+                          ? "Отклонен рестораном"
+                          : "Ожидает подтверждения админа"}
+                      </p>
+                      <p className="text-[10px] text-gray-400">
+                        {activeOrder.status === "accepted"
+                          ? `Ориентировочно ~${activeOrder.estimatedMinutes || 25} мин`
+                          : "В очереди на обработку"}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-full bg-gray-100 text-gray-400 flex items-center justify-center text-xs font-bold shrink-0">
+                      <i className="fa-solid fa-motorcycle"></i>
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold text-gray-500">Доставка курьером</p>
+                      <p className="text-[10px] text-gray-400">Курьер привезет заказ по адресу</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Delivery Details */}
+              <div className="bg-white rounded-3xl p-5 shadow-sm space-y-2.5 text-xs">
+                <h4 className="font-bold text-gray-400 uppercase tracking-wider mb-2">
+                  Детали доставки
+                </h4>
+                <div className="flex justify-between">
+                  <span className="text-gray-400">Получатель:</span>
+                  <span className="font-bold text-gray-800">{activeOrder.customerName}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-400">Телефон:</span>
+                  <span className="font-bold text-gray-800">{activeOrder.customerPhone}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-400">Адрес:</span>
+                  <span className="font-bold text-gray-800 text-right max-w-[200px]">
+                    {activeOrder.customerAddress}
+                  </span>
+                </div>
+                {activeOrder.customerComment && (
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Комментарий:</span>
+                    <span className="italic text-gray-600 text-right max-w-[200px]">
+                      {activeOrder.customerComment}
+                    </span>
+                  </div>
+                )}
+                <div className="pt-2 border-t flex justify-between items-center text-sm font-black">
+                  <span>Сумма заказа:</span>
+                  <span className="text-brand text-base">{activeOrder.totalAmount} ₽</span>
+                </div>
+              </div>
+
+              {/* Buttons */}
+              <div className="pt-2">
+                <button
+                  onClick={() => setShowOrderTracking(false)}
+                  className="w-full bg-gray-900 text-white py-4 rounded-2xl font-bold text-sm shadow-md active:scale-95 transition"
+                >
+                  Вернуться в меню
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* ==================== BOTTOM NAVIGATION ==================== */}
       <div
         id="bottom-nav"
         className={`absolute left-6 right-6 h-[70px] bg-gray-900 rounded-[24px] shadow-2xl flex justify-between items-center px-8 z-20 transition-transform duration-300 ${
-          showDetails || showCart ? "translate-y-[200%]" : "translate-y-0"
+          showDetails || showCart || showCheckoutModal || showOrderTracking
+            ? "translate-y-[200%]"
+            : "translate-y-0"
         }`}
         style={{
           bottom: "max(1.5rem, calc(var(--tg-safe-bottom) + 0.75rem))",
@@ -695,11 +1193,27 @@ export default function App() {
           )}
         </button>
 
-        <button className="text-gray-400 hover:text-white flex flex-col items-center gap-1 active:scale-90 transition">
-          <i className="fa-regular fa-bell text-lg"></i>
+        <button
+          onClick={() => {
+            if (activeOrder) {
+              setShowOrderTracking(true);
+            }
+          }}
+          className={`flex flex-col items-center gap-1 active:scale-90 transition ${
+            activeOrder ? "text-brand" : "text-gray-400 hover:text-white"
+          }`}
+          title="Статус заказа"
+        >
+          <i className="fa-solid fa-receipt text-lg"></i>
         </button>
-        <button className="text-gray-400 hover:text-white flex flex-col items-center gap-1 active:scale-90 transition">
-          <i className="fa-regular fa-user text-lg"></i>
+        <button
+          onClick={() => {
+            window.open("/admin", "_blank");
+          }}
+          className="text-gray-400 hover:text-white flex flex-col items-center gap-1 active:scale-90 transition"
+          title="Админ панель"
+        >
+          <i className="fa-solid fa-shield-halved text-lg"></i>
         </button>
       </div>
     </div>

@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "server": "bun run --cwd server src/index.ts",
     "build": "vite build",
     "preview": "vite preview"
   },
