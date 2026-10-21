@@ -98,6 +98,8 @@ button { font-family: inherit; }
   transform: translateZ(0);
   backface-visibility: hidden;
   -webkit-backface-visibility: hidden;
+  /* Block horizontal swipe — only vertical scroll allowed inside screens */
+  touch-action: pan-y;
 }
 .screen-hidden-right {
   transform: translateX(100%);
