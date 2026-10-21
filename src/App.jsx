@@ -365,6 +365,7 @@ export default function App() {
     <div
       id="app"
       className="w-full max-w-md mx-auto relative bg-[#F8F9FA] h-[100dvh] overflow-hidden flex flex-col font-sans"
+      style={{ touchAction: "pan-y" }}
     >
       {/* ==================== SCREEN 1: HOME ==================== */}
       <div
@@ -422,7 +423,10 @@ export default function App() {
         </div>
 
         {/* Categories */}
-        <div className="flex overflow-x-auto gap-3.5 px-6 mb-8 no-scrollbar touch-pan-x scroll-smooth -mx-1 px-7">
+        <div
+          className="flex overflow-x-auto gap-3.5 px-6 mb-8 no-scrollbar scroll-smooth -mx-1 px-7"
+          style={{ touchAction: "pan-x" }}
+        >
           {CATEGORIES.map((cat) => (
             <button
               key={cat.id}
