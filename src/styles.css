@@ -5,6 +5,7 @@ html, body, #root {
   padding: 0;
   height: 100%;
   width: 100%;
+  overflow: hidden;
 }
 
 :root {
@@ -21,7 +22,12 @@ body {
   background-color: #F8F9FA;
   min-height: 100%;
   -webkit-font-smoothing: antialiased;
-  overflow-x: hidden;
+  overflow: hidden;
+  /* Prevent iOS rubber-band scroll on the body */
+  overscroll-behavior: none;
+  /* Prevent layout shifts from address-bar resize on mobile */
+  position: fixed;
+  inset: 0;
 }
 
 #root {
@@ -30,6 +36,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
 }
 
 button { font-family: inherit; }
@@ -38,12 +45,23 @@ button { font-family: inherit; }
 .no-scrollbar::-webkit-scrollbar { display: none; }
 .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
 
+/* === Smooth momentum scrolling on iOS for scroll containers === */
+.overflow-y-auto,
+[class*="overflow-y-auto"] {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+}
+
 /* === Animations === */
 @keyframes float {
   0%, 100% { transform: translateY(0px); }
   50% { transform: translateY(-10px); }
 }
-.animate-float { animation: float 3s ease-in-out infinite; }
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+  /* GPU-accelerate the floating image so it doesn't cause repaints on the scroll layer */
+  will-change: transform;
+}
 
 @keyframes popIn {
   0% { opacity: 0; transform: scale(0.8) translateY(20px); }
@@ -64,16 +82,22 @@ button { font-family: inherit; }
 .delay-300 { animation-delay: 300ms; }
 .delay-400 { animation-delay: 400ms; }
 
-/* === Glass panel === */
+/* === Glass panel — avoid blur during active scroll (composited) === */
 .glass-panel {
-  background: rgba(255, 255, 255, 0.85);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  background: rgba(255, 255, 255, 0.92);
+  /* backdrop-filter removed: causes repaints and jank during scroll on mobile */
 }
 
 /* === Screen transitions === */
 .screen {
-  transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.4s ease;
+  transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.35s ease;
+  /* Promote each screen to its own compositor layer */
+  will-change: transform, opacity;
+  /* Prevent sub-pixel jitter on GPU layers */
+  -webkit-transform: translateZ(0);
+  transform: translateZ(0);
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
 }
 .screen-hidden-right {
   transform: translateX(100%);
@@ -86,7 +110,7 @@ button { font-family: inherit; }
   pointer-events: none;
 }
 .screen-active {
-  transform: translate(0, 0);
+  transform: translate3d(0, 0, 0);
   opacity: 1;
   pointer-events: auto;
 }
