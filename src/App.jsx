@@ -369,7 +369,7 @@ export default function App() {
       {/* ==================== SCREEN 1: HOME ==================== */}
       <div
         id="home-screen"
-        className={`screen ${showDetails || showCart || showOrderTracking ? "" : "screen-active"} absolute inset-0 z-10 overflow-y-auto pb-32 no-scrollbar`}
+        className={`screen ${showDetails || showCart || showOrderTracking ? "" : "screen-active"} absolute inset-0 z-10 overflow-y-auto pb-32 no-scrollbar overscroll-contain`}
       >
         {/* Header with safe area top padding for TG buttons */}
         <header
@@ -562,14 +562,15 @@ export default function App() {
         </div>
 
         {/* Content (Scrollable) */}
-        <div className="flex-1 overflow-y-auto no-scrollbar pb-32">
+        <div className="flex-1 overflow-y-auto no-scrollbar pb-32 overscroll-contain">
           {/* Image */}
-          <div className="relative w-full h-[45%] bg-brand-light flex items-center justify-center rounded-b-[40px] pt-10">
+          <div className="relative w-full h-[45%] bg-brand-light flex items-center justify-center rounded-b-[40px] pt-10 shrink-0">
             {currentProduct && (
               <img
                 src={currentProduct.img}
                 alt={currentProduct.name}
                 className="w-64 h-64 object-contain animate-float drop-shadow-2xl mix-blend-multiply"
+                style={{ willChange: 'transform' }}
               />
             )}
           </div>
@@ -694,7 +695,7 @@ export default function App() {
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-6 pb-28 no-scrollbar">
+        <div className="flex-1 overflow-y-auto p-6 pb-28 no-scrollbar overscroll-contain">
           {cart.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-center opacity-50">
               <i className="fa-solid fa-basket-shopping text-6xl mb-4 text-gray-300"></i>
@@ -866,7 +867,7 @@ export default function App() {
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-6 pb-28 no-scrollbar">
+        <div className="flex-1 overflow-y-auto p-6 pb-28 no-scrollbar overscroll-contain">
           <div className="bg-white rounded-3xl p-5 shadow-sm space-y-4 mb-4">
             <div>
               <label className="block text-xs font-bold text-gray-700 mb-1.5 uppercase tracking-wide">
@@ -991,7 +992,7 @@ export default function App() {
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-6 pb-28 no-scrollbar">
+        <div className="flex-1 overflow-y-auto p-6 pb-28 no-scrollbar overscroll-contain">
           {activeOrder && (
             <div className="space-y-4">
               {/* Dynamic Status Banner */}
